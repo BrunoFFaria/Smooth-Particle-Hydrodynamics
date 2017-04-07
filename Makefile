@@ -1,37 +1,37 @@
-#*	  ________________________________________________
-#*   /                                               / 
-#*  / Smooth particle hydrodynamics implementation  /
-#* /_______________________________________________/
+#*	  _________________________________________________________
+#*   /                                                        / 
+#*  / Smooth Particle hydrodynamics algorithm implementation /
+#* /________________________________________________________/
 #*/
 #*  Copyright Bruno Faria
 #*  University of Aveiro 
 #*  Department of physics
-#*  21/01/2017
+#*  21/05/2014
 #*
-# choose compiler (I use ICC)
+# escolhe compilador
 CC=icc			
 LD=icc
 #AR=xiar
-# flags to pass the compiler
+# flags a passar ao compilador 
 # -O3 -mssse3 -align -xssse3 -axssse3
-CFLAGS= -c -Wall -g  $(USER_DEF) -O3 -xHOST -qopenmp -unroll -funroll-loops -align -parallel  -xavx  #-qopt-report=4 -vec-report=4
+CFLAGS= -c -Wall -g  $(USER_DEF) -O3  -qopenmp  -xHOST -unroll -funroll-loops -align -parallel  -xavx  #-qopt-report=4 -vec-report=4
 
 
-# flags of libraries
+# flags de biblioteca
 LDFLAGS =  -mkl -lGL  -lGLU -lglut -lGLEW 
-# (files to compile)
-SOURCES = dynamics.c main.c marching_cubes.c memory.c shaders.c zpr.c
+# (ficheiros a compilar) para já fica assim!!!
+SOURCES = dynamics.c main.c memory.c shaders.c camera.c renderer.c
 
-# rule for getting an object .o 
+# extenções dos ficheiros seja objectos .o ou ficheiros de código 
 OBJECTS=$(SOURCES:.c=.o)
 
-# target name
+# nome do ficheiro executavel desejado...
 EXECUTABLE=sph
 
 # clean
 RM = rm -f
 
-# 
+# especifica um target, neste caso todos...
 all: $(SOURCES) $(EXECUTABLE)
 	
 $(EXECUTABLE): $(OBJECTS) 

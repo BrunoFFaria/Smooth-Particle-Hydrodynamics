@@ -3,9 +3,7 @@
 //
 
 #include "definitions.h"
-#include "dynamics.h.h"
-#include "marching_cubes.h"
-
+#include "dynamics.h"
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
@@ -517,132 +515,6 @@ void initialize_integrator(parts_t * parts, pol_t * pol, params_t params)
     (*pol) = params.define_system_init_state(parts);
 
 }
-
-real_p get_iso_value(parts_t * parts, real_p x0, real_p y0, real_p z0){
-    int i = 0, j = 0, k = 0;
-    real_p r = 0.0f, rsqr = 0.0f, iso = 0.0f, a = parts->default_h/3, b = parts->default_h;
-
-    for(j = 0; j < parts->num_particles; j++){
-        r = (x0 - parts->r->x[j]) * (x0 - parts->r->x[j]) +
-            (y0 - parts->r->y[j]) * (y0 - parts->r->y[j]) +
-            (z0 - parts->r->z[j]) * (z0 - parts->r->z[j]);
-
-            iso += ((parts->default_h/20) * (parts->default_h/20)) / (r);
-    }
-
-    return iso;
-}
-
-real_p get_iso_interp(real_p val1, real_p val2, real_p iso_thresh){
-    if(val2 - val1  == 0.0){
-        return 0.5f;
-    }else{
-        return  (iso_thresh - val1)/(val2-val1);
-    }
-}
-xyz get_normal(parts_t * parts, vector_t * neighbours_list, real_p x, real_p y, real_p z){
-    xyz n;
-    real_p norm = 0.0f;
-    n.x = get_iso_value(parts,  x - 0.01, y, z) - get_iso_value(parts,  x + 0.01, y, z);
-    n.y = get_iso_value(parts,  x, y - 0.01, z) - get_iso_value(parts,  x, y + 0.01, z);
-    n.z = get_iso_value(parts, x, y, z - 0.01) - get_iso_value(parts,  x, y, z + 0.01);
-
-    norm = sqrt(n.x * n.x + n.y*n.y + n.z * n.z);
-    n.x /= norm;
-    n.y /= norm;
-    n.z /= norm;
-    return n;
-}
-
-
-
-
-int compute_surface2(parts_t * parts, pol_t * pol, real_p resolution, real_p iso_thresh, vertex_t * vertexes, vertex_t * normals)
-{
-
-    real_p cell_x, cell_y, cell_z;
-    real_p interped_iso = 0.0f;
-
-    xyz vertex_list[12];
-    xyz normal_list[12];
-
-    extern char  tri_table[256][16];
-    extern int   edge_table[256];
-    extern int   edge_conn[12][2];
-    extern float edge_dir[12][3];
-
-    int j = 0, i = 0, k = 0, cube_index = 0, edges_flags = 0, ivertex = 0;
-    vector_t neighbours_list[27];
-    grid_cell_t grid;
-    triangles_t triangles[5];
-    int ntrig = 0, num_total_triangles = 0;
-    real_p neighbours[8][3] = { {0,0,0},{resolution,0,0},
-                                { resolution, resolution,0},{0,resolution,0},
-                                {0,0,resolution},{resolution,0,resolution},
-                                { resolution, resolution,resolution},{0,resolution,resolution}};
-
-    num_total_triangles = 0;
-
-    /* first clear visited state, then start drawing */
-    memset(parts->march_cubes_vis_state, 0, parts->num_particles * sizeof(int));
-
-
-    for (cell_x = pol->xmin; cell_x <= pol->xmax; cell_x += resolution) {
-        for (cell_y = pol->ymin; cell_y <= pol->ymax; cell_y += resolution) {
-            for (cell_z = pol->zmin; cell_z <= pol->zmax; cell_z += resolution) {
-
-                /* get isovalues */
-                for (i = 0; i < 8; i++) {
-                    grid.p[i].x = cell_x + neighbours[i][0];
-                    grid.p[i].y = cell_y + neighbours[i][1];
-                    grid.p[i].z = cell_z + neighbours[i][2];
-                    grid.val[i] = get_iso_value(parts, grid.p[i].x, grid.p[i].y, grid.p[i].z);
-
-                    if (grid.val[i] < iso_thresh) {
-                        cube_index |= 1 << i;
-                    }
-                }
-                edges_flags = edge_table[cube_index];
-                /* check whether the cube is inside or outside */
-
-                /* if totally inside or outside move on to the next one */
-                if (edges_flags == 0) { continue; }
-
-                /* go over each edge and interpolate */
-                for (i = 0; i < 12; i++) {
-
-                    /* is there any intersection? */
-                    if (edges_flags & (1 << i)) {
-
-                        /* interpolate the iso value on this edge */
-                        vertex_list[i] = VertexInterp(iso_thresh, grid.p[edge_conn[i][0]], grid.p[edge_conn[i][1]],
-                                                      grid.val[edge_conn[i][0]], grid.val[edge_conn[i][1]]);
-
-                        /* now get the normal at this vertex */
-                        normal_list[i] = get_normal(parts, neighbours_list, vertex_list[i].x, vertex_list[i].y,
-                                                    vertex_list[i].z);
-                    }
-                }
-                /* add found the triangles and normals to the list */
-                for(i=0;tri_table[cube_index][i]!=-1;i+=3) {
-                    vertexes[num_total_triangles].x = (GLfloat)vertex_list[tri_table[cube_index][i  ]].x;
-                    vertexes[num_total_triangles].y = (GLfloat)vertex_list[tri_table[cube_index][i+1]].y;
-                    vertexes[num_total_triangles].z = (GLfloat)vertex_list[tri_table[cube_index][i+2]].z;
-
-                    /* compute surface normal */
-                    normals[num_total_triangles].x = (GLfloat)normal_list[tri_table[cube_index][i  ]].x;
-                    normals[num_total_triangles].y = (GLfloat)normal_list[tri_table[cube_index][i+1]].y;
-                    normals[num_total_triangles].z = (GLfloat)normal_list[tri_table[cube_index][i+2]].z;
-
-                    num_total_triangles++;
-                }
-            }
-        }
-    }
-
-    return num_total_triangles;
-}
-
 
 
 void integrator_step(parts_t * parts, pol_t * pol)

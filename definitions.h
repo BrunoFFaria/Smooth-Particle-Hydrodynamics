@@ -4,8 +4,16 @@
 
 #ifndef SPHSIMULATION_DEFINITIONS_H
     #define SPHSIMULATION_DEFINITIONS_H
-
+	#include <GL/glut.h>
     #include <stdbool.h>
+     typedef struct{
+        GLfloat x,y,z;
+    }vertex_t;
+
+    typedef struct{
+        GLfloat r,g,b,w;
+    }color_t;
+    
     typedef float real_p;
 
     typedef struct{

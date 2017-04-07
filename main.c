@@ -2,14 +2,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
-#include <GL/glew.h>
 #include <math.h>
+
+#include "renderer.h"
+
 #include "definitions.h"
 #include "memory.h"
 #include "dynamics.h"
-#include "marching_cubes.h"
-#include "zpr.h"
+//#include "zpr.h"
+#include "camera.h"
 #include "shaders.h"
+
 
 
 
@@ -26,25 +29,17 @@
 #define XPARTICLES              20
 #define WATERVOLUME            0.1
 #define RESTDENSITY            998
-#define ELASTICCOEFF           0.0
-#define TIMESTEP               0.004
+#define ELASTICCOEFF           1
+#define TIMESTEP               0.0045
 #define VISCOSITYCOEFF         3.5
 #define STIFFNESS              3.0
 #define SURFACETHRESHOLD     7.065
 #define SURFACETENSION      0.0728
-#define XSPHCORRECTION         0.0f
-#define GLERROR                                                    \
-    {                                                              \
-        GLenum code = glGetError();                                \
-        while (code!=GL_NO_ERROR)                                  \
-        {                                                          \
-            printf("%s\n",(char *) gluErrorString(code));          \
-                code = glGetError();                               \
-        }                                                          \
-    }
+#define XSPHCORRECTION         0.5f
+
 /* define particles as a global array */
 parts_t * particles = NULL;
-pol_t polygon = { 4*0.43,4*0.43 + 4*0.43, 8*0.43f, 8*0.43f + 8*0.43f, 4*0.43, 4*0.43 + 4*0.43 };
+pol_t polygon = { 4*0.43f,4*0.43f + 4*0.43f, 8*0.43f, 8*0.43f + 8*0.43f, 4*0.43f, 4*0.43f + 4*0.43f};
 pol_t pol = {-0.25f, 0.25f, -0.5f, 0.5f, -0.25f, 0.25};
 
 
@@ -61,27 +56,21 @@ static void idle(void);
 void reshape(int w, int h);
 void keyboard(unsigned char key, int x, int y);
 pol_t particles_initial_positions(parts_t * parts);
+void print(float x, float y, const char *string);
 
-GLuint mprogram;
-GLuint m_vbo;
-GLuint m_color_vbo;
-GLuint compile_shader(const char * vsource, const char * fsource);
+GLuint depth_program;
+
+
+/* VBOs */
+GLuint position_vbo;
+GLuint color_vbo;
+
 double max_z = 0.0f;
 double min_z = 0.0f;
 
 /* */
-static const GLfloat afAmbientWhite [] = {0.75, 0.75, 0.75, 1.00};
-static const GLfloat afAmbientRed   [] = {0.25, 0.00, 0.00, 1.00};
-static const GLfloat afAmbientGreen [] = {0.00, 0.25, 0.00, 1.00};
-static const GLfloat afAmbientBlue  [] = {0.00, 0.00, 0.25, 1.00};
-static const GLfloat afDiffuseWhite [] = {0.75, 0.75, 0.75, 1.00};
-static const GLfloat afDiffuseRed   [] = {0.75, 0.00, 0.00, 1.00};
-static const GLfloat afDiffuseGreen [] = {0.00, 0.75, 0.00, 1.00};
-static const GLfloat afDiffuseBlue  [] = {0.00, 0.00, 0.75, 1.00};
-static const GLfloat afSpecularWhite[] = {1.00, 1.00, 1.00, 1.00};
-static const GLfloat afSpecularRed  [] = {1.00, 0.25, 0.25, 1.00};
-static const GLfloat afSpecularGreen[] = {0.25, 1.00, 0.25, 1.00};
-static const GLfloat afSpecularBlue [] = {0.25, 0.25, 1.00, 1.00};
+int visualization_mode = 1;
+renderer_t renderer;
 
 float l_interp(float a, float b, float t){
     return a+t*(b-a);
@@ -102,14 +91,12 @@ void colorRamp(float t, float * r){
 extern int w_width = WIDTH;
 extern int w_height = HEIGHT;
 
+
+
 int main(int argc, char * argv[]) {
     float *data = NULL;
     int i = 0;
     params_t params;
-    GLfloat afPropertiesAmbient [] = {0.75, 0.75, 0.50, 1.00};
-    GLfloat afPropertiesDiffuse [] = {0.75, 0.75, 0.75, 1.00};
-    GLfloat afPropertiesSpecular[] = {1.00, 1.00, 1.00, 1.00};
-    GLfloat lightPos[] = {0.1, 0.1f, -1.0f, 0.0f};
     glewExperimental=GL_FALSE;
     GLenum Err;
 
@@ -148,7 +135,7 @@ int main(int argc, char * argv[]) {
         exit(-1);
     }
 
-    glClearColor( 0.0, 0.0, 0.0, 1.0 );
+    glClearColor( 0.4, 0.4, 0.4, 1.0 );
     glClearDepth( 1.0 );
 
     /* Configure GLUT callback functions */
@@ -159,27 +146,24 @@ int main(int argc, char * argv[]) {
 
     glEnable(GL_DEPTH_TEST);
 
-
     /* compile shaders */
-    mprogram = compile_shader(vertex_shader, sphere_shader);
+    depth_program = compile_shader(depth_vertex_shader, depth_fragment_shader);
 
-    glClampColorARB( GL_CLAMP_VERTEX_COLOR_ARB, GL_FALSE);
-    glClampColorARB( GL_CLAMP_FRAGMENT_COLOR_ARB, GL_FALSE);
+    glClampColor(GL_CLAMP_VERTEX_COLOR, GL_FALSE);
+    glClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
 
-    /* enable VBO (positions)*/
-
-    glGenBuffers(1, &m_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo );
+    /* enable VBOs (positions)*/
+    glGenBuffers(1, &position_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, position_vbo );
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_t) * NUMPARTICLES, vertices, GL_DYNAMIC_DRAW);
 
-
     /* enable vbo colours */
-    glGenBuffers(1, &m_color_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m_color_vbo);
+    glGenBuffers(1, &color_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, color_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(GL_FLOAT) * 4 * NUMPARTICLES, 0, GL_DYNAMIC_DRAW);
 
     /* fill color buffer */
-    glBindBufferARB(GL_ARRAY_BUFFER, m_color_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, color_vbo);
 
     /* get write address */
     data = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
@@ -189,39 +173,17 @@ int main(int argc, char * argv[]) {
         data+=3;
         *data++=1.0f;
     }
-    glUnmapBufferARB(GL_ARRAY_BUFFER);
-
-
-    /* another method for drawing */
-    /*
-    glEnableClientState(GL_NORMAL_ARRAY);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glNormalPointer(GL_FLOAT, 0, normals);
-    glVertexPointer(3, GL_FLOAT, 0, vertices);
-    */
-
-    GLERROR;
-    glLineWidth(1.4);
-    glEnable(GL_LINE_SMOOTH);
-    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glViewport(0, 0, (GLint) WIDTH, (GLint) HEIGHT);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    GLERROR;
-    glMatrixMode(GL_MODELVIEW);
-    gluPerspective(60, (float)(w_width)/(float)(w_height), -1, 10);
-    gluLookAt(0.45,0.80,0.25,0,0,0,0,0,1);
-
+    glUnmapBuffer(GL_ARRAY_BUFFER);
     GLERROR;
 
+    /* init water renderer */
+    renderer = init_water_renderer(w_width, w_height, NUMPARTICLES);
 
-    /* Configure ZPR module */
-    zprInit();
-    zprSelectionFunc(drawBoundaries);       /* Selection mode draw function */
-    zprPickFunc(pick);                      /* Pick event client callback   */
     GLERROR;
+    /* init camera */
+    init_camera(w_width, w_height);
+    camera_set_pos(-0.07f, 0.06f, -1.12f);
+    camera_set_rot(-60.0f,0,60.0f);
 
     /* Enter GLUT event loop */
     glutMainLoop();
@@ -229,8 +191,8 @@ int main(int argc, char * argv[]) {
     /* Simulation finished */
     destroy_parts_obj( particles );
 
-    glDeleteBuffers(1, &m_vbo);
-    glDeleteBuffers(1, &m_color_vbo);
+    glDeleteBuffers(1, &position_vbo);
+    glDeleteBuffers(1, &color_vbo);
     return 0;
 }
 int add_layer(real_p * x, real_p * y, real_p * z, real_p xmin, real_p xmax, real_p ymin, real_p ymax, real_p zmin, real_p zmax, real_p step){
@@ -249,6 +211,7 @@ int add_layer(real_p * x, real_p * y, real_p * z, real_p xmin, real_p xmax, real
     }
     return ct;
 }
+
 pol_t particles_initial_positions(parts_t * parts){
     int  j = 0, num_bound_particles = 0, num_particles = 0;
     real_p frac_bound = 4.00f, frac_part = 2.0f;
@@ -257,7 +220,8 @@ pol_t particles_initial_positions(parts_t * parts){
     real_p xpos = 0.0f, ypos = 0.0f, zpos = 0.0f;
 
     pol_t pol;
-
+	static unsigned int enabled_disabled = 1;
+	int r_start = (int)(30.0f * (double)rand()/((double)RAND_MAX));
     /* start by defining the polygon */
     /* initialize polygon */
     pol.xmin = 10 * parts->default_h;
@@ -281,17 +245,21 @@ pol_t particles_initial_positions(parts_t * parts){
 
     xpos = x_start; ypos = y_start; zpos = z_start;
 
+
+	
     /* start by defining particle positions */
     for(j = 0; j < parts->num_particles; j++){
         if( (j % 42) == 0 && j > 0 ){
             xpos = x_start;
             ypos += parts->default_h/frac_part;
         }
-
-        if( (j % 378) == 0 && j > 0 ){
-            xpos = x_start;
-            ypos = y_start + 35*parts->default_h/frac_part;
-        }
+        
+		if(enabled_disabled){
+	        if( (j % 378) == 0 && j > 0 ){
+    	        xpos = x_start;
+    	        ypos = y_start + (20 + r_start)*parts->default_h/frac_part;
+    	    }
+    	}
 
         if( (j % 756) == 0 && j > 0 ){
             xpos = x_start;
@@ -307,48 +275,11 @@ pol_t particles_initial_positions(parts_t * parts){
         parts->v->z[j] = 0.001f*rand()/(real_p)(RAND_MAX);
         xpos += parts->default_h/frac_part;
     }
-
+    
+	/* switch method */
+	enabled_disabled ^= 1;
+	
     return pol;
-}
-
-/*
-void reshape(int w, int h){
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(60.0, (float)w/((float)h),-1,10.0 );
-    glMatrixMode(GL_MODELVIEW);
-    glViewport(0,0,w,h);
-    w_width = w;
-    w_height = h;
-}
-*/
-
-GLuint compile_shader(const char * vsource, const char * fsource){
-    GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-    GLuint frament_shader = glCreateShader(GL_FRAGMENT_SHADER);
-    GLuint program = 0;
-    GLint success = 0;
-    char temp[256];
-    GLERROR;
-    glShaderSource(vertex_shader, 1, &vsource, 0);
-    glShaderSource(frament_shader, 1, &fsource, 0);
-
-    glCompileShader(vertex_shader);
-    glCompileShader(frament_shader);
-
-    program = glCreateProgram();
-    glAttachShader(program, vertex_shader);
-    glAttachShader(program, frament_shader);
-    glLinkProgram(program);
-
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if(!success){
-        glGetProgramInfoLog(program, 256, 0, temp);
-        printf("Failed to link program:\n%s\n",temp);
-        glDeleteProgram(program);
-        program = 0;
-    }
-    return program;
 }
 
 
@@ -364,7 +295,7 @@ static double ftime(void) {
 }
 
 double last_T;
-
+double current_timestep = 0;
 static void idle(void)
 {
     int i = 0;
@@ -375,28 +306,16 @@ static void idle(void)
     extern double _scale;
 
     if(delta_T > TIMEWAIT )
-    {
+    {	
+    	current_timestep+=TIMESTEP;
         integrator_step(particles, &polygon);
-        /*
-        num_vertices = compute_surface2(particles, &polygon, particles->default_h/4, 1.0f, vertices, normals);
-        for(i = 0; i < num_vertices; i++){
-            if(i == 0){
-                max_z = vertices[i].z;
-                min_z = vertices[i].z;
-            }else{
-                if(vertices[i].z>max_z){
-                    max_z = vertices[i].z;
-                }
-                if(vertices[i].z<min_z){
-                    min_z = vertices[i].z;
-                }
-            }
-            vertices[i].x = (GLfloat)mapminmax(polygon.xmin, polygon.xmax, pol.xmin, pol.xmax, vertices[i].x);
-            vertices[i].y = (GLfloat)mapminmax(polygon.ymin, polygon.ymax, pol.ymin, pol.ymax, vertices[i].y);
-            vertices[i].z = (GLfloat)mapminmax(polygon.zmin, polygon.zmax, pol.zmin, pol.zmax, vertices[i].z);
-
+        
+        if(current_timestep >= 3.0f){
+        	/* restart simulation */
+        	current_timestep = 0.0f;
+			polygon = particles_initial_positions( particles );
         }
-        */
+
 
         for(i = 0; i < particles->num_particles; i++) {
             vertices[i].x = (GLfloat)mapminmax(polygon.xmin, polygon.xmax, pol.xmin, pol.xmax, particles->r->x[i]);
@@ -424,7 +343,7 @@ static void idle(void)
             colors[i].w=1.0f;
         }
 
-        printf("%f - %f\n",1/delta_T,_scale);
+        //printf("%f - %f\n",1/delta_T,_scale);
         last_T = now_T;
         glutPostRedisplay();
     }
@@ -443,6 +362,12 @@ void keyboard(unsigned char key, int x, int y){
             );
         }
         fclose(fp);
+    }else if(key == (int)'m'){
+        if(visualization_mode == 1){
+            visualization_mode = 0;
+        }else{
+            visualization_mode = 1;
+        }
     }
 }
 
@@ -450,87 +375,138 @@ void keyboard(unsigned char key, int x, int y){
 void drawBoundaries(void)
 {
     int i = 0;
-    extern double _scale;
+    float * view_matrix;
+    float * projection_matrix;
 
+    double fov = 0.0f;
+	char buffer[128];
+    GLfloat plane_vertices[] = {1.0f, 1.0f, -0.25f - (float) particles->default_h / 2,
+                                1.0f, -1.0f, -0.25f - (float) particles->default_h / 2,
+                                -1.0f, -1.0f, -0.25f - (float) particles->default_h / 2,
+                                -1.0f, 1.0f, -0.25f - (float) particles->default_h / 2};
+
+
+    GLint indexes[] = {0, 1, 3, 1, 2, 3};
     /* Name-stack manipulation for the purpose of
        selection hit processing when mouse button
        is pressed.  Names are ignored in normal
        OpenGL rendering mode.                    */
     /* Render animation */
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    camera_render_view();
+    fov = camera_get_fov();
 
 
-    glEnable(GL_POINT_SPRITE_ARB);
-    glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
-    glEnable(GL_VERTEX_PROGRAM_POINT_SIZE_NV);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
+    view_matrix = camera_get_view();
+    projection_matrix = camera_get_projection();
 
-    glUseProgram(mprogram);
+    if(visualization_mode == 0) {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        //glClearColor( 0.0, 0.0, 0.0, 1.0 );
+        /* render plane */
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
 
-    glUniform1f( glGetUniformLocation(mprogram, "point_scale"), (float)(w_height/(tan(60.0f * 0.5 * PI/180.0))));
-    glUniform1f( glGetUniformLocation(mprogram, "point_radius"), (float)(particles->default_h));//0.0125f*0.8f
-    glUniform1f( glGetUniformLocation(mprogram, "far"), 0.9f);//0.0125f*0.8f
-    glUniform1f( glGetUniformLocation(mprogram, "near"), 0.1f);//0.0125f*0.8f
-    glColor3d(1,1,1);
+        glUseProgram(renderer.plane_shader.program);
 
-    /* time to draw the points*/
+        glBindVertexArray(renderer.plane_shader.vao);
 
-    glBindBufferARB(GL_ARRAY_BUFFER_ARB, m_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_t) * particles->num_particles, vertices, GL_DYNAMIC_DRAW);
-    glVertexPointer(3, GL_FLOAT, 0, 0);
-    glEnableClientState(GL_VERTEX_ARRAY);
+        glBindBuffer(GL_ARRAY_BUFFER, renderer.plane_shader.vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(plane_vertices), plane_vertices, GL_STATIC_DRAW);
 
-    /* Enable colours */
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, renderer.plane_shader.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indexes), indexes, GL_STATIC_DRAW);
 
-    glBindBufferARB(GL_ARRAY_BUFFER_ARB, m_color_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(color_t) * particles->num_particles, colors, GL_DYNAMIC_DRAW);
-    glColorPointer(4, GL_FLOAT, 0, 0);
-    glEnableClientState(GL_COLOR_ARRAY);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (GLvoid*)0);
+        glEnableVertexAttribArray(0);
 
-    glDrawArrays(GL_POINTS, 0, particles->num_particles);
+        glUniformMatrix4fv(glGetUniformLocation(renderer.plane_shader.program, "projection"), 1, GL_FALSE, projection_matrix);
+        glUniformMatrix4fv(glGetUniformLocation(renderer.plane_shader.program, "mView"), 1, GL_FALSE, view_matrix);
 
-    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_COLOR_ARRAY);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        glDisableVertexAttribArray(0);
 
-    glUseProgram(0);
-    glDisable(GL_POINT_SPRITE_ARB);
-    glDisableClientState(GL_VERTEX_ARRAY);
+        glEnable(GL_POINT_SPRITE);
+        glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
+        glEnable(GL_VERTEX_PROGRAM_POINT_SIZE_NV);
 
-    /*
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDrawArrays(GL_TRIANGLES,0, num_vertices);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    */
-    #define axis(xe,ye,ze,xs,ys,zs)		glVertex3d(xs,ys,zs);	\
+        glUseProgram(depth_program);
+
+        //glUniform1f( glGetUniformLocation(mprogram, "point_scale"), (float)(w_height/(tan(60.0f * 0.5 * PI/180.0))));
+        glUniform1f(glGetUniformLocation(depth_program, "point_scale"),
+                    (float) (w_height / (tan(fov * 0.5 * PI/180.0))));
+        glUniform1f(glGetUniformLocation(depth_program, "point_radius"),
+                    (float) (particles->default_h / 4));//0.0125f*0.8f
+
+
+        /* time to draw the points*/
+        glBindBuffer(GL_ARRAY_BUFFER, position_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_t) * particles->num_particles, vertices, GL_DYNAMIC_DRAW);
+        glVertexPointer(3, GL_FLOAT, 0, 0);
+        glEnableClientState(GL_VERTEX_ARRAY);
+
+        /* Enable colours */
+        glBindBuffer(GL_ARRAY_BUFFER, color_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(color_t) * particles->num_particles, colors, GL_DYNAMIC_DRAW);
+        glColorPointer(4, GL_FLOAT, 0, 0);
+        glEnableClientState(GL_COLOR_ARRAY);
+
+        glDrawArrays(GL_POINTS, 0, particles->num_particles);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisableClientState(GL_COLOR_ARRAY);
+
+        glUseProgram(0);
+        glDisable(GL_POINT_SPRITE);
+        glDisableClientState(GL_VERTEX_ARRAY);
+
+        glLineWidth(1.4);
+        glEnable(GL_LINE_SMOOTH);
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        #define axis(xe,ye,ze,xs,ys,zs)		glVertex3d(xs,ys,zs);	\
 		                                glVertex3d(xe,ye,ze);
 
-    // draw polygon boundaries
-    glBegin( GL_LINES );
-    glColor3f(1.0,1.0,1.0);
+        // draw polygon boundaries
+        glBegin( GL_LINES );
+        glColor3f(1.0,1.0,1.0);
 
-    axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
 
-    axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
+        axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
 
-    axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmax+particles->default_h/2);
 
-    axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmax+particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmin-particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmax+particles->default_h/2);
 
-    axis(pol.xmin-particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmin-particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymin-particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymin-particles->default_h/2, pol.zmin-particles->default_h/2);
 
-    axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
-    axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmin-particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmin-particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
+        axis(pol.xmax+particles->default_h/2,pol.ymax+particles->default_h/2,pol.zmax+particles->default_h/2, pol.xmax+particles->default_h/2, pol.ymax+particles->default_h/2, pol.zmin-particles->default_h/2);
 
-    glEnd();
+        glEnd();
 
-}
+    }else{
+        render_water(renderer, w_width, w_height, fov, (particles->default_h ), particles->num_particles, vertices);
+    }
+
+	print(10, 20, "Developed by: Bruno Faria");
+	print(10, 46, "Department of Physics");
+	print(10, 72, "University of Aveiro");
+	sprintf(buffer,"Time instant:%f seconds",current_timestep);
+	print(10, 98, buffer);
+    glDisable(GL_BLEND);
+    glDisable(GL_LINE_SMOOTH);
+
+ }
 
 
 /* Callback function for drawing */
@@ -548,4 +524,33 @@ void display(void)
 void pick(GLint name)
 {
     fflush(stdout);
+}
+
+
+void print(float x, float y, const char *string)
+{
+	int i = 0;
+    //Assume we are in MODEL_VIEW already
+	glPushMatrix ();
+	glLoadIdentity ();
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix ();
+	glLoadIdentity();
+
+	GLint viewport [4];
+	glGetIntegerv (GL_VIEWPORT, viewport);
+	gluOrtho2D (0,viewport[2], viewport[3], 0);
+
+	glDepthFunc (GL_ALWAYS);
+	glColor3f (0.888,0.888,0.888);
+	glRasterPos2f(x, y);
+
+	for (i = 0; string[i]!= '\0'; ++i)
+		glutBitmapCharacter(GLUT_BITMAP_TIMES_ROMAN_24, string[i]);
+
+	glDepthFunc (GL_LESS);
+	glPopMatrix ();
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix ();
+
 }
